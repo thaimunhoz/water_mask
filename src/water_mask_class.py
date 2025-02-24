@@ -1,220 +1,237 @@
 import os
 import ee
 import geemap
-import warnings
+import logging
 import rasterio
 import numpy as np
 import geopandas as gpd
 import rioxarray as rxr
+from typing import Optional
 from rasterio.mask import mask
 from rasterio.merge import merge
-from shapely.geometry import box
-from shapely.geometry import shape
+from shapely.geometry import box, shape
 from rasterio.features import shapes
-warnings.filterwarnings("ignore", category=RuntimeWarning)
+from rasterio.transform import Affine
+from rasterio.crs import CRS
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class WaterMaskClass:
 
+    """
+    A class to extract water masks from satellite imagery using either an image-based approach
+    or the JRC Global Surface Water dataset.
+    """
+
     def __init__(self):
-        pass
+        ee.Initialize()
 
-    def get_jrc_gcer(self, bbox_geom, percentage_occurrence, output_path, database_path):
+    def get_jrc_gcer(
+        self,
+        bbox_geom: gpd.GeoDataFrame,
+        percentage_occurrence: int,
+        output_path: str,
+        database_path: str,
+    ) -> str:
+        """
+        Generate a water mask using the JRC Global Surface Water dataset from the GCER database.
 
-        '''
-        Generates the water mask using the JRC Global Surface Water dataset from GCER database
-        Input:
-            bbox_geom (GeoDataFrame): input shapefile
-            percentage_occurrence (int): percentage of water occurrence
-            output_path (str): path to save the output shapefile
-        Return:
-            str: path to the water mask shapefile
-        '''
+        Args:
+            bbox_geom (gpd.GeoDataFrame): Input bounding box geometry.
+            percentage_occurrence (int): Percentage of water occurrence threshold.
+            output_path (str): Path to save the output shapefile.
+            database_path (str): Path to the JRC dataset directory.
 
-        #image_path = r'Z:\guser\tml\mypapers\hls_synthetic\JRC_DATA'
-        image_path =  database_path
+        Returns:
+            str: Path to the generated water mask shapefile.
+        """
+        if not os.path.exists(database_path):
+            raise FileNotFoundError(f"Database path {database_path} does not exist.")
 
-        files = [f for f in os.listdir(image_path) if os.path.isfile(os.path.join(image_path, f)) and f.endswith('.tif')]
+        files = [
+            f for f in os.listdir(database_path)
+            if os.path.isfile(os.path.join(database_path, f)) and f.endswith(".tif")
+        ]
 
-        count = 0  # in case of more than one image intersect the lake
+        if not files:
+            raise ValueError(f"No TIFF files found in {database_path}.")
+
         images_list = []
+        for count, file in enumerate(files):
+            file_path = os.path.join(database_path, file)
+            try:
+                with rasterio.open(file_path) as src:
+                    raster_bounds = src.bounds
+                    bounds_aux = bbox_geom.bounds
 
-        for file in files:
-
-            with rasterio.open(image_path + '/' + file) as src:
-
-                raster_bounds = src.bounds
-                geom = bbox_geom.geometry
-                bounds_aux = bbox_geom.bounds
-
-                if (bounds_aux[['minx']].values > raster_bounds[2] or bounds_aux[['maxx']].values < raster_bounds[0] or
-                        bounds_aux[['miny']].values > raster_bounds[3] or bounds_aux[['maxx']].values < raster_bounds[
-                            1]):
-                    continue
-
-                else:
-                    try:
-                        subset, out_transform = mask(src, geom, nodata=src.nodata, crop=True, indexes=1)
-                    except:
+                    if (
+                        bounds_aux["minx"].values[0] > raster_bounds[2]
+                        or bounds_aux["maxx"].values[0] < raster_bounds[0]
+                        or bounds_aux["miny"].values[0] > raster_bounds[3]
+                        or bounds_aux["maxy"].values[0] < raster_bounds[1]
+                    ):
                         continue
 
+                    subset, out_transform = mask(src, bbox_geom.geometry, crop=True, indexes=1)
                     subset_clip = subset > percentage_occurrence
 
                     out_meta = src.meta.copy()
-                    out_meta.update({"driver": "GTiff",
-                                     "height": subset_clip.shape[0],
-                                     "width": subset_clip.shape[1],
-                                     "transform": out_transform,
-                                     "nodata": 0})
+                    out_meta.update(
+                        {
+                            "driver": "GTiff",
+                            "height": subset_clip.shape[0],
+                            "width": subset_clip.shape[1],
+                            "transform": out_transform,
+                            "nodata": 0,
+                        }
+                    )
 
-                    with rasterio.open(output_path + '/' + 'water_mask_jrc_' + str(count) + '.tif', "w",
-                                       **out_meta) as dest:
+                    output_file = os.path.join(output_path, f"water_mask_jrc_{count}.tif")
+                    with rasterio.open(output_file, "w", **out_meta) as dest:
                         dest.write(subset_clip.astype(int), 1)
-                        dest.nodata = 0
 
-                    images_list.append(output_path + '/' + 'water_mask_jrc_' + str(count) + '.tif')
-                    count += 1
+                    images_list.append(output_file)
+            except Exception as e:
+                logger.warning(f"Failed to process {file_path}: {e}")
+                continue
 
-        if count > 1:
-            src_files_to_mosaic = []
+        if not images_list:
+            raise RuntimeError("No valid images were processed.")
 
-            for fp in images_list:
-                src = rasterio.open(fp)
-                src_files_to_mosaic.append(src)
+        if len(images_list) > 1:
+            mosaic, out_trans = merge([rasterio.open(fp) for fp in images_list])
+            out_meta = rasterio.open(images_list[0]).meta.copy()
+            out_meta.update(
+                {
+                    "driver": "GTiff",
+                    "height": mosaic.shape[1],
+                    "width": mosaic.shape[2],
+                    "transform": out_trans,
+                }
+            )
 
-            # Merge the tiffs into one mosaic
-            mosaic, out_trans = merge(src_files_to_mosaic)
-
-            out_meta = src_files_to_mosaic[0].meta.copy()
-
-            out_meta.update({
-                "driver": "GTiff",
-                "height": mosaic.shape[1],
-                "width": mosaic.shape[2],
-                "transform": out_trans,
-            })
-
-            with rasterio.open(output_path + '/' + 'water_mask_jrc.tif', "w", **out_meta) as dest:
+            mosaic_path = os.path.join(output_path, "water_mask_jrc.tif")
+            with rasterio.open(mosaic_path, "w", **out_meta) as dest:
                 dest.write(mosaic)
 
-            return output_path + '/' + 'water_mask_jrc.tif'
-
+            return mosaic_path
         else:
-            return output_path + '/' + 'water_mask_jrc_0.tif'
+            return images_list[0]
 
-    def raster2shp(self, raster_numpy, raster_transform, raster_crs):
+    def raster2shp(
+        self, raster_numpy: np.ndarray, raster_transform: Affine, raster_crs: CRS
+    ) -> gpd.GeoDataFrame:
+        """
+        Convert a raster array to a shapefile.
 
-        '''
-        Converts a raster to a shapefile
-        Input:
-            raster_numpy (numpy array): raster array
-            raster_transform (affine.Affine): raster transform
-            raster_crs (str): raster crs
-        Return:
-            GeoDataFrame: shapefile
-        '''
+        Args:
+            raster_numpy (np.ndarray): Raster array.
+            raster_transform (Affine): Raster transform.
+            raster_crs (CRS): Raster coordinate reference system.
 
+        Returns:
+            gpd.GeoDataFrame: GeoDataFrame containing the vectorized raster.
+        """
         results = (
-            {'properties': {'raster_val': v}, 'geometry': s}
+            {"properties": {"raster_val": v}, "geometry": s}
             for s, v in shapes(raster_numpy.astype(np.int16), transform=raster_transform)
             if v  # Only take shapes with raster_val = True (i.e., v=1)
         )
 
-        geometries = [shape(feature['geometry']) for feature in results]
+        geometries = [shape(feature["geometry"]) for feature in results]
+        return gpd.GeoDataFrame(geometry=geometries, crs=raster_crs)
 
-        gdf = gpd.GeoDataFrame(geometry=geometries, crs=raster_crs)
+    def get_wm_jrc(
+        self, image_path: str, percentage_occurrence: int, output_path: str
+    ) -> gpd.GeoDataFrame:
+        """
+        Generate a water mask using the JRC Global Surface Water dataset.
 
-        return gdf
+        Args:
+            image_path (str): Path to the input image.
+            percentage_occurrence (int): Percentage of water occurrence threshold.
+            output_path (str): Path to save the output shapefile.
 
-    def get_wm_jrc(self, image_path, percentage_occurrence, output_path):
+        Returns:
+            gpd.GeoDataFrame: GeoDataFrame containing the water mask.
+        """
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image path {image_path} does not exist.")
 
-        '''
-        Generates the water mask using the JRC Global Surface Water dataset
-        Input:
-            gdf_input (GeoDataFrame): input shapefile
-            percentage_occurrence (int): percentage of water occurrence
-            output_path (str): path to save the output shapefile
-            output_crs (int): output crs
-        Return:
-            str: path to the water mask shapefile
-        '''
-
-        ee.Initialize()
-
-        # Return the bouding box of the input image
         xda_nir = rxr.open_rasterio(image_path)
         bounds = xda_nir.rio.bounds()
-        xmin, ymin, xmax, ymax = bounds
-        bounding_box = box(xmin, ymin, xmax, ymax)
+        bounding_box = box(*bounds)
         gdf_input = gpd.GeoDataFrame({"geometry": [bounding_box]}, crs=xda_nir.rio.crs).to_crs(epsg=4326)
 
-        output_crs = xda_nir.rio.crs.to_epsg()
-
         feature_collection = geemap.geopandas_to_ee(gdf_input)
-
-        gsw = ee.Image('JRC/GSW1_4/GlobalSurfaceWater')
-        occurrence = gsw.select('occurrence')
+        gsw = ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+        occurrence = gsw.select("occurrence")
         water_mask = occurrence.gt(percentage_occurrence)
 
-        water_mask_bbox = water_mask.clip(feature_collection).reproject('EPSG:' + str(output_crs), None, 30)
+        output_crs = xda_nir.rio.crs.to_epsg()
+        water_mask_bbox = water_mask.clip(feature_collection).reproject(f"EPSG:{output_crs}", None, 30)
 
-        # Save the JRC water mask as .tiff file
-        geemap.ee_export_image(water_mask_bbox, filename=output_path + '/' + 'water_mask_jrc.tif',
-                               region=feature_collection.geometry().bounds())
+        output_tif = os.path.join(output_path, "water_mask_jrc.tif")
+        geemap.ee_export_image(
+            water_mask_bbox,
+            filename=output_tif,
+            region=feature_collection.geometry().bounds(),
+        )
 
         try:
-            with rasterio.open(output_path + '/' + 'water_mask_jrc.tif') as src:
+            with rasterio.open(output_tif) as src:
                 wm_jrc = src.read(1)
-        except:
-            jrc_img_path = self.get_jrc_gcer(gdf_input, percentage_occurrence, output_path)
-
-            with rasterio.open(jrc_img_path) as src:
-                wm_jrc = src.read(1)
-
-        gdf = self.raster2shp(wm_jrc, src.transform, src.crs)
-
-        # Clean the water_mask_jrc files
+                gdf = self.raster2shp(wm_jrc, src.transform, src.crs)
+        except Exception as e:
+            logger.warning(f"Failed to process JRC mask: {e}")
+            #jrc_img_path = self.get_jrc_gcer(gdf_input, percentage_occurrence, output_path)
+            #with rasterio.open(jrc_img_path) as src:
+            #    wm_jrc = src.read(1)
+            #    gdf = self.raster2shp(wm_jrc, src.transform, src.crs)
 
         return gdf
 
-    def get_mask_algal(self, mask_method, output_path, img_path = None):
+    def get_mask_algal(
+        self, mask_method: str, output_path: str, img_path: Optional[str] = None
+    ) -> None:
+        """
+        Generate a water mask using either an image-based approach or the JRC dataset.
 
-        '''
-        Classify algal blooms based on the NDCI index
-        Input:
-            img_path (str): path to the image folder
-            ndci_threshold (float): NDCI threshold
-        Return:
-            xarray: algal bloom mask
-        '''
+        Args:
+            mask_method (str): Method to use ("image_based" or "jrc_based").
+            output_path (str): Path to save the output shapefile.
+            img_path (Optional[str]): Path to the input image folder (required for "image_based" method).
 
+        Raises:
+            ValueError: If `img_path` is not provided for the "image_based" method.
+        """
         if mask_method == "image_based":
+            if not img_path:
+                raise ValueError("img_path is required for the image_based method.")
 
-            band_path = [i for i in os.listdir(img_path) if i.endswith('.tif')]
+            band_path = [i for i in os.listdir(img_path) if i.endswith(".tif")]
+            green_band = next((band for band in band_path if "B03" in band), None)
+            nir_band = next((band for band in band_path if "B05" in band), None)
+            swir_band = next((band for band in band_path if "B06" in band or "B11" in band or "B12" in band), None)
 
-            green_band = [band for band in band_path if 'B03' in band]
-            nir_band = [band for band in band_path if 'B05' in band]
-            swir_band = [band for band in band_path if 'B06' in band or 'B11' in band or 'B12' in band]
+            if not all([green_band, nir_band, swir_band]):
+                raise ValueError("Required bands (B03, B05, B06/B11/B12) not found in the image folder.")
 
-            xda_green = rxr.open_rasterio(img_path + '/' + green_band[0])/10000
-            xda_nir = rxr.open_rasterio(img_path + '/' + nir_band[0])/10000
-            xda_swir = rxr.open_rasterio(img_path + '/' + swir_band[0])/10000
+            xda_green = rxr.open_rasterio(os.path.join(img_path, green_band)) / 10000
+            xda_nir = rxr.open_rasterio(os.path.join(img_path, nir_band)) / 10000
+            xda_swir = rxr.open_rasterio(os.path.join(img_path, swir_band)) / 10000
 
-            # Apply glint correction
             green_band_glint = np.where((xda_green - xda_swir) < 0, xda_green, (xda_green - xda_swir))
-
-            # 2. Define mask for SWIR band to exclude land pixels
             swir_mask = xda_swir < 0.03
-
-            # Calculate MNDWI index to mask land
             mndwi = (green_band_glint - xda_swir) / (green_band_glint + xda_swir)
             mndwi_mask = mndwi > 0.3
-
             water_mask = swir_mask & mndwi_mask
 
             water_shp = self.raster2shp(water_mask, xda_nir.rio.transform, xda_nir.rio.crs)
-
         else:
-            # 3. Apply JRC water mask
-            water_shp = self.get_wm_jrc(img_path, 75, img_path)
+            water_shp = self.get_wm_jrc(img_path, 75, output_path)
 
         water_shp.to_file(output_path)
+        logger.info(f"Water mask saved to {output_path}.")
