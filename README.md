@@ -31,5 +31,7 @@ pip install git+https://github.com/thaimunhoz/water_mask
 *Outputs*
 - **Shapefile**: The output is a shapefile containing the extracted water mask. The shapefile will be saved at the specified output_path.
 
+![alt text](figures/results_esse.png)
+
 ### Usage example
 To see examples of how to use the package, refer to the Jupyter notebook provided in the notebooks folder. The notebook contains detailed examples and usage scenarios.
