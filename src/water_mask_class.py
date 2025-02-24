@@ -200,12 +200,12 @@ class WaterMaskClass:
 
         Args:
             mask_method (str): Method to use ("image_based" or "jrc_based").
-            output_path (str): Path to save the output shapefile.
             img_path (Optional[str]): Path to the input image folder (required for "image_based" method).
 
         Raises:
             ValueError: If `img_path` is not provided for the "image_based" method.
         """
+
         if mask_method == "image_based":
             if not img_path:
                 raise ValueError("img_path is required for the image_based method.")
