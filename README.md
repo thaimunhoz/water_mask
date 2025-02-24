@@ -1,4 +1,6 @@
-# Water Mask extraction tool
+# Water Mask extraction tool <img src="figures/logo.png" width="250" align="right" />
+![Version](https://img.shields.io/badge/version-v1-blue)
+![Language](https://img.shields.io/badge/language-Python-blue)
 
 The Water Mask Extraction Tool is a Python package designed to extract water masks from satellite imagery. The tool offers two distinct methods for water mask extraction:
 
