@@ -25,7 +25,6 @@ pip install git+https://github.com/thaimunhoz/water_mask
 ### Inputs and Outputs
 *Inputs*
 - **mask_method (str)**: The method to be used for water mask extraction. It can be either "image_based" or "jrc_based".
-- **output_path (str)**: The path where the output shapefile will be saved.
 - **img_path (str)**: The path to the input satellite image.
 
 *Outputs*
