@@ -26,7 +26,7 @@ class WaterMaskClass:
     """
 
     def __init__(self):
-        ee.Initialize()
+        pass
 
     def get_jrc_gcer(
         self,
@@ -210,16 +210,16 @@ class WaterMaskClass:
             if not img_path:
                 raise ValueError("img_path is required for the image_based method.")
 
-            band_path = [i for i in os.listdir(img_path) if i.endswith(".tif")]
-            green_band = next((band for band in band_path if "B03" in band), None)
-            nir_band = next((band for band in band_path if "B05" in band), None)
-            swir_band = next((band for band in band_path if "B06" in band or "B11" in band or "B12" in band), None)
+            band_path = [i for i in os.listdir(img_path) if i.endswith(".tif") or i.endswith(".TIF")]
+            green_band = next((band for band in band_path if "B03" in band or "B3" in band), None)
+            nir_band = next((band for band in band_path if "B05" in band or "B5" in band), None)
+            swir_band = next((band for band in band_path if "B06" in band or "B6" in band or "B11" in band or "B12" in band), None)
 
             if not all([green_band, nir_band, swir_band]):
                 raise ValueError("Required bands (B03, B05, B06/B11/B12) not found in the image folder.")
 
-            xda_green = rxr.open_rasterio(os.path.join(img_path, green_band)) / 10000
-            xda_swir = rxr.open_rasterio(os.path.join(img_path, swir_band)) / 10000
+            xda_green = rxr.open_rasterio(os.path.join(img_path, green_band)) #/ 10000
+            xda_swir = rxr.open_rasterio(os.path.join(img_path, swir_band)) #/ 10000
 
             green_band_glint = np.where((xda_green - xda_swir) < 0, xda_green, (xda_green - xda_swir))
             swir_mask = xda_swir < 0.03
@@ -233,7 +233,7 @@ class WaterMaskClass:
 
             water_shp = self.raster2shp(water_mask, _transform, _crs)
         else:
-            water_shp = self.get_wm_jrc(img_path, 75, output_path)
+            water_shp = self.get_wm_jrc(img_path, 75)
 
         water_shp.to_file("water_mask.shp")
 
